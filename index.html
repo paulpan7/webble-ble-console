@@ -1,24 +1,691 @@
-cat > index.html <<'EOF'
 <!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Web BLE UART Console</title></head>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Web BLE Terminal</title>
+<style>
+  :root{
+    --bg:#0b0d10; --card:#111418; --muted:#8b95a7; --fg:#e6e9ee;
+    --accent:#60a5fa; --ok:#22c55e; --warn:#f59e0b; --border:#1f242c;
+    --tx:#d000a8;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Inter,sans-serif;
+  }
+  .wrap{max-width:1200px;margin:20px auto;padding:0 16px}
+  .header{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    margin-bottom:14px;
+  }
+  .header h1{
+    margin:0;
+    font-weight:700;
+    letter-spacing:.2px;
+  }
+  .logo{
+    height:2.5em; /* roughly title height */
+    width:auto;
+  }
+  .toolbar{
+    display:flex;flex-wrap:wrap;gap:10px;align-items:center;
+    background:var(--card);border:1px solid var(--border);
+    padding:10px;border-radius:14px;
+  }
+  .chip{padding:.35rem .6rem;border:1px solid var(--border);
+    border-radius:999px;color:var(--muted)}
+  .chip b{color:var(--ok)}
+  .btn{
+    appearance:none;border:1px solid var(--border);background:#0e1116;
+    color:var(--fg);padding:.55rem .9rem;border-radius:12px;cursor:pointer;
+  }
+  .btn:hover{border-color:#2a3240}
+  .btn.primary{border-color:var(--accent)}
+  label, select{color:var(--muted)}
+  select, input[type="text"]{
+    background:#0e1116;color:var(--fg);border:1px solid var(--border);
+    border-radius:10px;padding:.45rem .6rem;
+  }
+  #term{
+    margin-top:12px; background:#0b0e13;border:1px solid var(--border);
+    border-radius:14px; padding:12px 14px; height:420px; max-height:420px;
+    font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    white-space:pre-wrap; overflow:auto;
+  }
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px}
+  .grow{flex:1 1 280px}
+  .muted{color:var(--muted)}
+  .tx{font-weight:700;color:var(--tx)}
+  #term::-webkit-scrollbar{height:10px;width:10px}
+  #term::-webkit-scrollbar-thumb{background:#1d2330;border-radius:8px}
+  #term::-webkit-scrollbar-track{background:transparent}
+  .plotwrap{
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:14px;
+    padding:10px 12px;
+    margin-top:12px;
+  }
+  .plotwrap canvas {
+    width: 100%;
+    height: 260px;
+    display: block;
+    border-radius: 10px;
+    background: #0d1016;
+  }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    justify-content: flex-start;
+    margin-top: 6px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .legend .sw {
+    display: inline-block;
+    width: 18px;
+    height: 3px;
+    margin-right: 6px;
+    background: currentColor;
+    border-radius: 2px;
+  }
+</style>
+</head>
 <body>
-  <h1>Web BLE UART Console</h1>
-  <button id="connectBtn">Connect</button>
-  <button id="sendBtn">Send "Hello"</button>
-  <pre id="log" style="white-space:pre-wrap;border:1px solid #ccc;padding:8px;height:200px;overflow:auto;"></pre>
+  <div class="wrap">
+    <div class="header">
+      <h1>NovaE BLE Terminal</h1>
+      <img src="biowear_logo.bmp" alt="BIOWEAR Logo" class="logo">
+    </div>
+
+    <div class="toolbar">
+      <button id="btnConnect" class="btn primary">Connect</button>
+      <button id="btnDisconnect" class="btn">Disconnect</button>
+      <span class="chip">Status: <b id="status">Idle</b> <span id="devname" class="muted"></span></span>
+      <label><input type="checkbox" id="showTs" unchecked> Show timestamps</label>
+      <button id="btnSaveCapture" class="btn" style="display:none">Save Capture</button>
+      <button id="btnSaveLog" class="btn">Save Log</button>
+      <button id="btnPlotTop" class="btn">Plot Log</button>
+    </div>
+
+    <div class="toolbar" style="margin-top:12px">
+      <button id="btnInfo" class="btn" title="Send 'i'">Info</button>
+      <button id="btnStart" class="btn" title="Send 's MMDDHHMM' (current time)">Start</button>
+      <button id="btnPeak" class="btn" title="Send 'p <N>'">Peak</button>
+      <input id="peakCount" type="number" min="1" step="1" value="10" placeholder="10" style="width:80px" title="Peak sample count (default 10)">
+      <button id="btnStop" class="btn" title="Send 'x'">Stop</button>
+      <button id="btnDump" class="btn" title="Send 'd' and start capture">Dump</button>
+      <button id="btnErase" class="btn" title="Send 'e'">Erase</button>
+    </div>
+
+    <div id="term" aria-live="polite"></div>
+
+    <div class="toolbar" style="margin-top:12px">
+      <input id="cmd" class="grow" type="text" placeholder="Type command… press Enter to send" />
+      <label>Line end
+        <select id="ending">
+          <option value="none">None</option>
+          <option value="lf">\n</option>
+          <option value="crlf" selected>\r\n</option>
+          <option value="cr">\r</option>
+        </select>
+      </label>
+      <label><input id="hexMode" type="checkbox"> Hex</label>
+      <button id="btnSend" class="btn">Send</button>
+      <button id="btnPlot" class="btn">Plot Log</button>
+      <input id="fileLog" type="file" accept=".txt,.csv" style="display:none">
+      <button id="btnClear" class="btn">Clear</button>
+    </div>
+    <div id="plots" style="margin-top:12px; display:none">
+      <div class="plotwrap">
+        <canvas id="plot1"></canvas>
+        <div class="legend" id="legend1"></div>
+      </div>
+      <div class="plotwrap">
+        <canvas id="plot2"></canvas>
+        <div class="legend" id="legend2"></div>
+      </div>
+      <div class="plotwrap">
+        <canvas id="plot3"></canvas>
+        <div class="legend" id="legend3"></div>
+      </div>
+      <div class="toolbar" style="margin-top:12px; justify-content:center">
+        <button id="btnPlotBottom" class="btn">Plot Log</button>
+      </div>
+    </div>
+
+    <p class="muted" style="margin:10px 2px 0">
+      Works in Chrome/Edge (desktop/Android). iOS Safari/Chrome (WebKit) lack Web Bluetooth;
+      use a Web-BLE browser like Bluefy if testing on iPhone.
+    </p>
+  </div>
+
 <script>
-const SVC="6e400001-b5a3-f393-e0a9-e50e24dcca9e",TX="6e400003-b5a3-f393-e0a9-e50e24dcca9e",RX="6e400002-b5a3-f393-e0a9-e50e24dcca9e";
-let rx; const logEl=document.getElementById('log'); const log=(m)=>{logEl.textContent+=m+"\n"; logEl.scrollTop=logEl.scrollHeight;}
-document.getElementById('connectBtn').onclick=async()=>{
-  try{
-    const dev=await navigator.bluetooth.requestDevice({filters:[{services:[SVC]}]});
-    const srv=await dev.gatt.connect(); const svc=await srv.getPrimaryService(SVC);
-    const tx=await svc.getCharacteristic(TX); rx=await svc.getCharacteristic(RX);
-    await tx.startNotifications(); tx.addEventListener('characteristicvaluechanged',e=>log("RX: "+new TextDecoder().decode(e.target.value)));
-    log("Connected to "+(dev.name||"device"));
-  }catch(e){log("Error: "+e)}
-};
-document.getElementById('sendBtn').onclick=async()=>{ if(!rx){log("Not connected");return;}
-  await rx.writeValue(new TextEncoder().encode("Hello\n")); log("TX: Hello"); };
-</script></body></html>
-EOF
+(() => {
+  const $ = id => document.getElementById(id);
+  const term=$("term"), statusEl=$("status"), cmd=$("cmd"), ending=$("ending"),
+        hexMode=$("hexMode"), showTs=$("showTs"),
+        saveCapBtn=$("btnSaveCapture"), saveLogBtn=$("btnSaveLog"),
+        devNameEl=$("devname"),
+        btnPlot=$("btnPlot"), btnPlotTop=$("btnPlotTop"), btnPlotBottom=$("btnPlotBottom"), fileLog=$("fileLog"),
+        btnInfo=$("btnInfo"), btnStart=$("btnStart"), btnPeak=$("btnPeak"), btnDump=$("btnDump"), btnStop=$("btnStop"), btnErase=$("btnErase"), peakCount=$("peakCount"),
+        plots=$("plots"), plot1=$("plot1"), plot2=$("plot2"), plot3=$("plot3"),
+        legend1=$("legend1"), legend2=$("legend2"), legend3=$("legend3");
+  async function sendCmd(text){
+    if(!rxChar){ append(`<span class="muted">\n[System] Not connected\n</span>`); return; }
+    try{
+      const payload = withEnding(text);
+      append(`<span class="tx">${esc(payload)}</span>`);
+      await writeChunks(rxChar, enc.encode(payload));
+    }catch(e){ append(`<span class=\"muted\">\n[Send error] ${e}\n</span>`); }
+  }
+
+  let device=null,server=null,service=null,txChar=null,rxChar=null;
+  const enc=new TextEncoder(), dec=new TextDecoder();
+  let capturing=false, captureData="", rxRemainder="";
+  // Escape HTML special chars so TX text doesn’t break the DOM
+  function esc(s){
+    return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  }
+
+  function ts(){return new Date().toLocaleTimeString();}
+  function append(html){
+    const prefix = showTs.checked ? `<span class="muted">[${ts()}] </span>` : "";
+    term.insertAdjacentHTML("beforeend", prefix+html);
+    term.scrollTop = term.scrollHeight;
+  }
+  function setStatus(txt, name){
+    statusEl.textContent = txt;
+    statusEl.style.color = (txt==="Connected") ? "var(--ok)" : "var(--muted)";
+    devNameEl.textContent = (txt === "Connected" && name) ? ` — ${name}` : "";
+  }
+  function withEnding(text){
+    switch(ending.value){
+      case "lf": return text+"\n";
+      case "crlf": return text+"\r\n";
+      case "cr": return text+"\r";
+      default: return text;
+    }
+  }
+  async function writeChunks(char, bytes){
+    const MTU=20;
+    for(let i=0;i<bytes.length;i+=MTU){
+      const chunk=bytes.slice(i,i+MTU);
+      if(char.writeValueWithoutResponse) await char.writeValueWithoutResponse(chunk);
+      else await char.writeValue(chunk);
+      await new Promise(r=>setTimeout(r,5));
+    }
+  }
+  function normalizeLine(s){
+    let t=s.replace(/\r+$/,'').toLowerCase().trim();
+    if(t.startsWith('tx:')) t=t.slice(3).trim();
+    return t.replace(/[^a-z0-9]/g,'');
+  }
+  function handleCompleteLine(lineRaw){
+    const raw=lineRaw.replace(/\r+$/,'');
+    const token=normalizeLine(raw);
+    if(token==='d'){
+      capturing=true; captureData="";
+      saveCapBtn.style.display="none";
+      append(`<span class="muted">\n[Capture started]\n</span>`);
+      return;
+    }
+    if(token==='done'){
+      capturing=false;
+      append(`<span class="muted">\n[Capture ended — ${captureData.length} bytes]\n</span>`);
+      if(captureData.length) saveCapBtn.style.display="";
+      return;
+    }
+    if(capturing){ captureData+=raw+"\n"; }
+  }
+  function onNotifyText(txt){
+    append(txt);
+    rxRemainder+=txt;
+    const parts=rxRemainder.split(/\n/);
+    rxRemainder=parts.pop();
+    for(const one of parts) handleCompleteLine(one);
+  }
+
+  // --- CSV parsing & plotting helpers ---
+  function parseCSV(text){
+    // Strip BOM and normalize newlines
+    text = text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+    const allLines = text.split('\n');
+
+    // Remove purely empty lines but keep others for scanning
+    const lines = allLines.filter(l => l.trim().length > 0);
+    if(!lines.length) throw new Error('Empty file');
+
+    // Find the first line that looks like CSV/TSV (has a comma or tab)
+    let headerIdx = -1, delim = null;
+    for(let i=0;i<lines.length;i++){
+      const L = lines[i];
+      if(L.indexOf('\t') !== -1){ headerIdx = i; delim = '\t'; break; }
+      if(L.indexOf(',')  !== -1){ headerIdx = i; delim = ','; break; }
+    }
+    if(headerIdx < 0) throw new Error("Couldn't detect header (no comma/tab line found)");
+
+    // Split helper (no quoted fields expected)
+    const split = (line) => line.split(delim).map(s => s.trim().replace(/^"|"$/g,''));
+
+    // Parse headers from that first delimited line
+    const headersRaw = split(lines[headerIdx]);
+    if(!headersRaw.length) throw new Error('No headers found');
+
+    // Normalization: case-insensitive and ignore non-word chars
+    const norm = s => (s||'').replace(/[^A-Za-z0-9]/g,'').toUpperCase();
+    const headersNorm = headersRaw.map(h => norm(h));
+
+    // Build index mapping using normalized header names
+    const idx = Object.create(null);
+    headersNorm.forEach((h,i)=>{ idx[h] = i; });
+
+    // Collect rows from the lines AFTER the header line, skipping any stray non-delimited lines
+    const rows = [];
+    for(let i=headerIdx+1; i<lines.length; i++){
+      const L = lines[i];
+      if((delim==='\t' && L.indexOf('\t') === -1) || (delim===',' && L.indexOf(',') === -1)) continue; // skip non-data lines
+      const cols = split(L);
+      // Only accept rows with at least as many columns as headers (extra columns OK; we slice)
+      if(cols.length < headersRaw.length) continue;
+      rows.push(cols.slice(0, headersRaw.length));
+    }
+
+    return {headers: headersRaw, headersNorm, idx, rows, norm};
+  }
+
+  function hhmmToMinutes(hhmm){
+    // supports HH:MM (optionally HH:MM:SS -> ignores seconds)
+    const m = /^\s*(\d{1,2}):(\d{2})(?::\d{2})?\s*$/i.exec(hhmm||"");
+    if(!m) return NaN;
+    return (+m[1])*60 + (+m[2]);
+  }
+
+  function getX(rows, idx, norm){
+    const candidates = ['HH_MM','HH:MM','TIME','HHMM'];
+    let xi = -1;
+    for(const c of candidates){
+      const key = norm(c);
+      if(key in idx){ xi = idx[key]; break; }
+    }
+    if(xi < 0) throw new Error('Missing time column (tried: ' + candidates.join(', ') + ')');
+    const xs = rows.map(r=>hhmmToMinutes(r[xi]));
+    return xs;
+  }
+
+  function prepSeries(headers, nameList, idx, rows, scale=1, norm){
+    const series = [];
+    for(const name of nameList){
+      const key = norm(name);
+      if(!(key in idx)) throw new Error(`Missing column: ${name}`);
+      const yi = idx[key];
+      const ys = rows.map(r=>{
+        const v = parseFloat(r[yi]);
+        return isFinite(v) ? v*scale : NaN;
+      });
+      series.push({name, y: ys});
+    }
+    return series;
+  }
+
+  function autoscaleY(yArrays){
+    let min=+Infinity, max=-Infinity;
+    for(const arr of yArrays){
+      for(const v of arr){ if(!isNaN(v)){ if(v<min) min=v; if(v>max) max=v; } }
+    }
+    if(min===+Infinity){min=0; max=1;}
+    if(min===max){min-=0.5; max+=0.5;}
+    return [min,max];
+  }
+
+  function drawAxes(ctx, W, H, xMin, xMax, yMin, yMax, labelX, labelY){
+    ctx.save();
+    ctx.strokeStyle = '#2a3240';
+    ctx.lineWidth = 1;
+    // grid
+    const xTicks=6, yTicks=5;
+    for(let i=0;i<=xTicks;i++){
+      const t = i/xTicks; const x = 50 + t*(W-60);
+      ctx.beginPath(); ctx.moveTo(x, 10); ctx.lineTo(x, H-40); ctx.stroke();
+    }
+    for(let j=0;j<=yTicks;j++){
+      const t = j/yTicks; const y = 10 + (1-t)*(H-50);
+      ctx.beginPath(); ctx.moveTo(50, y); ctx.lineTo(W-10, y); ctx.stroke();
+    }
+    // axes
+    ctx.strokeStyle = '#4b5568';
+    ctx.beginPath(); ctx.moveTo(50,10); ctx.lineTo(50,H-40); ctx.lineTo(W-10,H-40); ctx.stroke();
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--muted') || '#8b95a7';
+    ctx.font = '12px system-ui, sans-serif';
+    ctx.textAlign='center'; ctx.fillText(labelX, (W)/2, H-18);
+    ctx.save(); ctx.translate(14,(H-30)/2); ctx.rotate(-Math.PI/2); ctx.textAlign='center'; ctx.fillText(labelY, 0,0); ctx.restore();
+    // tick labels
+    ctx.fillStyle = '#9aa4b5';
+    ctx.textAlign='right';
+    for(let j=0;j<=yTicks;j++){
+      const t=j/yTicks; const v = yMin + t*(yMax-yMin);
+      const y = 10 + (1-t)*(H-50);
+      ctx.fillText(v.toFixed(0), 46, y+3);
+    }
+    ctx.textAlign='center';
+    for(let i=0;i<=xTicks;i++){
+      const t=i/xTicks; const v = xMin + t*(xMax-xMin);
+      const x = 50 + t*(W-60);
+      // convert minutes to HH:MM
+      const hh = Math.floor(v/60); const mm = Math.round(v%60);
+      const lab = `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+      ctx.fillText(lab, x, H-24);
+    }
+    ctx.restore();
+  }
+
+  function drawSeries(ctx, W, H, x, seriesList, yMin, yMax){
+    const palette = ['#60a5fa','#22c55e','#f59e0b','#e879f9','#34d399','#f87171','#c4b5fd','#fbbf24'];
+    function X(v){ return 50 + (v - x.min)/(x.max-x.min) * (W-60); }
+    function Y(v){ return 10 + (1 - (v - yMin)/(yMax-yMin)) * (H-50); }
+    seriesList.forEach((s,si)=>{
+      ctx.beginPath();
+      ctx.strokeStyle = palette[si % palette.length];
+      let first=true;
+      for(let i=0;i<x.data.length;i++){
+        const xv=x.data[i]; const yv=s.y[i];
+        if(isNaN(xv) || isNaN(yv)) continue;
+        const px=X(xv), py=Y(yv);
+        if(first){ ctx.moveTo(px,py); first=false; }
+        else{ ctx.lineTo(px,py); }
+      }
+      ctx.stroke();
+    });
+  }
+
+  function buildLegend(el, names){
+    el.innerHTML='';
+    names.forEach((name,i)=>{
+      const item=document.createElement('div');
+      item.className='muted';
+      item.innerHTML = `<span class="sw" style="color:inherit"></span>${name}`;
+      item.style.color = ['#60a5fa','#22c55e','#f59e0b','#e879f9','#34d399','#f87171','#c4b5fd','#fbbf24'][i%8];
+      el.appendChild(item);
+    });
+  }
+
+  function plotToCanvas(canvas, legendEl, xMinutes, seriesList, opts){
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    const ctx = canvas.getContext('2d');
+    const W = Math.max(600, rect.width);
+    const H = 240;
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.clearRect(0, 0, W, H);
+
+    const xMin = Math.min(...xMinutes.filter(v=>!isNaN(v)));
+    const xMax = Math.max(...xMinutes.filter(v=>!isNaN(v)));
+    const [yMinAuto,yMaxAuto] = autoscaleY(seriesList.map(s=>s.y));
+    const yMin = opts?.yMin ?? yMinAuto;
+    const yMax = opts?.yMax ?? yMaxAuto;
+
+    // axes
+    const xTicks = 6, yTicks = 5;
+    ctx.strokeStyle = "#2a3240";
+    ctx.lineWidth = 1;
+    for(let i=0;i<=xTicks;i++){
+      const x = 50 + i*(W-60)/xTicks;
+      ctx.beginPath(); ctx.moveTo(x, 20); ctx.lineTo(x, H-40); ctx.stroke();
+    }
+    for(let j=0;j<=yTicks;j++){
+      const y = 20 + j*(H-60)/yTicks;
+      ctx.beginPath(); ctx.moveTo(50, y); ctx.lineTo(W-10, y); ctx.stroke();
+    }
+    ctx.strokeStyle = "#4b5568";
+    ctx.beginPath(); ctx.moveTo(50,20); ctx.lineTo(50,H-40); ctx.lineTo(W-10,H-40); ctx.stroke();
+
+    // axis labels
+    ctx.fillStyle = "#9aa4b5";
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(opts?.labelX || "", W/2, H-10);
+    ctx.save(); ctx.translate(18, H/2); ctx.rotate(-Math.PI/2); ctx.fillText(opts?.labelY || "", 0, 0); ctx.restore();
+
+    // tick labels (Y already above). Now X with optional start offset
+    ctx.fillStyle = "#8b95a7";
+    ctx.textAlign = "center";
+    const offsetMin = (opts && typeof opts.startOffsetMinutes === 'number') ? (opts.startOffsetMinutes % 1440) : null;
+    for(let i=0;i<=xTicks;i++){
+      const v = xMin + (i/xTicks)*(xMax - xMin); // duration minutes
+      let labelMin = v;
+      if (offsetMin !== null && Number.isFinite(v)) {
+        labelMin = (offsetMin + v) % 1440; // wrap in a day
+      }
+      const hh = Math.floor(labelMin/60), mm = Math.round(labelMin%60);
+      ctx.fillText(`${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`, 50 + i*(W-60)/xTicks, H-25);
+    }
+
+    // plot data
+    const palette = ['#60a5fa','#22c55e','#f59e0b','#e879f9','#34d399','#f87171','#c4b5fd','#fbbf24'];
+    const X = v => 50 + (v - xMin)/(xMax - xMin) * (W - 60);
+    const Y = v => 20 + (1 - (v - yMin)/(yMax - yMin)) * (H - 60);
+    seriesList.forEach((s,si)=>{
+      ctx.beginPath();
+      ctx.lineWidth = 1.6;
+      ctx.strokeStyle = palette[si % palette.length];
+      let first = true;
+      s.y.forEach((yv,i)=>{
+        const xv = xMinutes[i];
+        if(isNaN(yv)||isNaN(xv)) return;
+        const px = X(xv), py = Y(yv);
+        if(first){ctx.moveTo(px,py); first=false;} else ctx.lineTo(px,py);
+      });
+      ctx.stroke();
+    });
+
+    // legend
+    buildLegend(legendEl, seriesList.map(s=>s.name));
+  }
+
+  async function handlePlotFile(file){
+    const text = await file.text();
+
+    // Extract optional first-line start time MMDDHHMM (e.g., 10041101)
+    let startOffsetMin = null; // minutes since midnight for labeling
+    try {
+      const headLine = (text || "").split(/\r?\n/).find(l => l.trim().length > 0) || "";
+      const m = headLine.match(/^\s*(\d{2})(\d{2})(\d{2})(\d{2})\s*$/);
+      if (m) {
+        const hh = parseInt(m[3], 10), mm = parseInt(m[4], 10);
+        if (Number.isFinite(hh) && Number.isFinite(mm)) {
+          startOffsetMin = (hh % 24) * 60 + (mm % 60);
+        }
+      }
+    } catch {}
+
+    const table = parseCSV(text);
+    const {headers, headersNorm, idx, rows, norm} = table;
+
+    if(!rows.length){
+      throw new Error('No data rows found after header.');
+    }
+
+    // Build X from HH:MM-like column
+    const x = getX(rows, idx, norm);
+
+    // Panel 1: P1 WE1..WE4 (nA) with ylim [70,100]
+    const s1 = prepSeries(headers, ['P1_WE1_nA','P1_WE2_nA','P1_WE3_nA','P1_WE4_nA'], idx, rows, 1, norm);
+    plotToCanvas(plot1, legend1, x, s1, {yMin:70, yMax:100, labelX:'Time of day', labelY:'WE Current [nA]', startOffsetMinutes: startOffsetMin});
+
+    // Panel 2: P2 WE1..WE4 (nA) with ylim [70,100]
+    const s2 = prepSeries(headers, ['P2_WE1_nA','P2_WE2_nA','P2_WE3_nA','P2_WE4_nA'], idx, rows, 1, norm);
+    plotToCanvas(plot2, legend2, x, s2, {yMin:70, yMax:100, labelX:'Time of day', labelY:'WE Current [nA]', startOffsetMinutes: startOffsetMin});
+
+    // Panel 3: P1 RE/CE in mV
+    const s3 = prepSeries(headers, ['P1_RE_mV','P1_CE_mV'], idx, rows, 1, norm);
+    plotToCanvas(plot3, legend3, x, s3, {labelX:'Time of day', labelY:'RE/CE [mV]', startOffsetMinutes: startOffsetMin});
+
+    plots.style.display='';
+
+    // Diagnostics to the terminal
+    append(`<span class="muted">[Plot] Columns detected: ${esc(headers.join(', '))}\n</span>`);
+    if (startOffsetMin !== null) {
+      const hh = String(Math.floor(startOffsetMin/60)).padStart(2,'0');
+      const mm = String(startOffsetMin%60).padStart(2,'0');
+      append(`<span class="muted">[Plot] Using start time from file header: ${hh}:${mm} (MMDDHHMM)\n</span>`);
+    } else {
+      append(`<span class="muted">[Plot] No MMDDHHMM header detected; using duration axis labels.\n</span>`);
+    }
+  }
+
+  $("btnConnect").onclick=async()=>{
+    try{
+      const svc="6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+      device=await navigator.bluetooth.requestDevice({filters:[{services:[svc]}]});
+      server=await device.gatt.connect();
+      service=await server.getPrimaryService(svc);
+      txChar=await service.getCharacteristic("6e400003-b5a3-f393-e0a9-e50e24dcca9e");
+      rxChar=await service.getCharacteristic("6e400002-b5a3-f393-e0a9-e50e24dcca9e");
+      await txChar.startNotifications();
+      txChar.addEventListener("characteristicvaluechanged", e=>onNotifyText(dec.decode(e.target.value)));
+      setStatus("Connected", device.name || "(no name)");
+      append(`<span class="muted">\n[System] Connected to ${device.name||"(no name)"}\n</span>`);
+      device.addEventListener('gattserverdisconnected',()=>{
+        setStatus("Disconnected", "");
+        append(`<span class="muted">\n[System] Disconnected\n</span>`);
+      });
+      cmd.focus();
+    }catch(e){
+      setStatus("Idle", "");
+      append(`<span class="muted">\n[Error] ${e}\n</span>`);
+    }
+  };
+  $("btnDisconnect").onclick=()=>{try{device?.gatt.disconnect();}catch{} setStatus("Idle", ""); append(`<span class="muted">\n[System] Disconnected by user\n</span>`);};
+  $("btnClear").onclick=()=>{term.innerHTML="";};
+  $("btnSend").onclick=sendCurrent;
+  cmd.addEventListener("keydown", e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendCurrent();}});
+  async function sendCurrent(){
+    if(!rxChar){append(`<span class="muted">\n[System] Not connected\n</span>`);return;}
+    let text=cmd.value;
+    if(!text&&!hexMode.checked) return;
+    try{
+      if(hexMode.checked){
+        const hex=text.replace(/[^0-9a-fA-F]/g,'');
+        if(hex.length%2!==0){append(`<span class="muted">\n[System] Invalid hex\n</span>`);return;}
+        const bytes=new Uint8Array(hex.length/2);
+        for(let i=0;i<bytes.length;i++) bytes[i]=parseInt(hex.substr(i*2,2),16);
+        append(`<span class="tx">${esc(hex)}</span>`);
+        await writeChunks(rxChar,bytes);
+      }else{
+        const payload=withEnding(text);
+        append(`<span class="tx">${esc(payload)}</span>`);
+        await writeChunks(rxChar,enc.encode(payload));
+      }
+      cmd.value="";
+    }catch(e){append(`<span class="muted">\n[Send error] ${e}\n</span>`);}
+  }
+  // ===== Helpers for Start/Peak/Dump toolbar =====
+  function pad2(n){ return String(n).padStart(2,'0'); }
+  function fmtMMDDHHMM(date){
+    const mm = pad2(date.getMonth()+1);
+    const dd = pad2(date.getDate());
+    const hh = pad2(date.getHours());
+    const mi = pad2(date.getMinutes());
+    return `${mm}${dd}${hh}${mi}`;
+  }
+
+  if(btnInfo) btnInfo.onclick = () => sendCmd('i');
+  if(btnStart) btnStart.onclick = () => {
+    const code = fmtMMDDHHMM(new Date());
+    sendCmd(`s ${code}`);
+  };
+  if(btnPeak) btnPeak.onclick = () => {
+    const n = parseInt(peakCount?.value||'', 10);
+    if(!Number.isFinite(n) || n <= 0){
+      append(`<span class="muted">\n[Peak] Enter a positive integer for samples.\n</span>`);
+      return;
+    }
+    sendCmd(`p ${n}`);
+  };
+  if(btnStop) btnStop.onclick = () => sendCmd('x');
+  if(btnDump) btnDump.onclick = () => sendCmd('d');
+  if(btnErase) btnErase.onclick = () => {
+    append(`<span class="muted">\n[Erase] Sending erase command…\n</span>`);
+    sendCmd('e');
+  };
+
+  saveCapBtn.onclick=()=>{
+    if(!captureData.length) return;
+    const stamp=new Date().toISOString().replace(/[:.]/g,'-');
+    const blob=new Blob([captureData],{type:"text/plain"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");a.href=url;a.download=`ble-capture-${stamp}.txt`;
+    document.body.appendChild(a);a.click();URL.revokeObjectURL(url);a.remove();
+  };
+  saveLogBtn.onclick = () => {
+      const raw = term.textContent || "";
+      const U = raw.toUpperCase();
+
+      // Find the last "LOG TAG," (so if you did multiple runs, we take the latest)
+      const startMark = "LOG TAG,";
+      const startIdx = U.lastIndexOf(startMark);
+      if (startIdx === -1) {
+        alert('Could not find "LOG TAG," in the console output.');
+        return;
+      }
+
+      // Find the first "# DONE" after that
+      const afterStart = raw.slice(startIdx + startMark.length);
+      const endRelIdx = afterStart.toUpperCase().search(/(^|\n)\s*#\s*DONE\b/);
+      if (endRelIdx === -1) {
+        alert('Could not find "# DONE" following "LOG TAG,".');
+        return;
+      }
+
+      // Extract just the block (trim one leading newline if present)
+      let block = afterStart.slice(0, endRelIdx);
+      block = block.replace(/^\s*\n?/, ""); // remove leading blank line if any
+
+      // Download
+      const stamp = new Date().toISOString().replace(/[:.]/g,'-');
+      const blob = new Blob([block], { type: "text/plain" });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href = url;
+      a.download = `ble-log-${stamp}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      URL.revokeObjectURL(url);
+      a.remove();
+    };
+  const openPlotPicker = () => fileLog.click();
+  if(btnPlot) btnPlot.onclick = openPlotPicker;
+  if(btnPlotTop) btnPlotTop.onclick = openPlotPicker;
+  if(btnPlotBottom) btnPlotBottom.onclick = openPlotPicker;
+  fileLog.addEventListener('change', async (e) => {
+    const f = e.target.files && e.target.files[0];
+    if(!f){ return; }
+    try{
+      append(`<span class="muted">\n[Plot] Parsing ${esc(f.name)}...\n</span>`);
+      await handlePlotFile(f);
+      append(`<span class="muted">[Plot] Done.\n</span>`);
+    } catch(err){
+      // Try to surface available headers when parsing failed
+      let hint = '';
+      try{
+        const t = await f.text();
+        const firstLine = (t||'').split(/\r?\n/)[0] || '';
+        hint = firstLine ? `\nAvailable header line: ${esc(firstLine)}` : '';
+      }catch{}
+      append(`<span class="muted">\n[Plot error] ${esc(String(err))}${hint}\n</span>`);
+    } finally{
+      fileLog.value = '';
+    }
+  });
+})();
+</script>
+</body>
+</html>
