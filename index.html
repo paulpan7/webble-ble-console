@@ -116,9 +116,25 @@
 
     <div class="toolbar" style="margin-top:12px">
       <button id="btnInfo" class="btn" title="Send 'i'">Info</button>
+
+      <label title="Sampling period in seconds" style="display:flex;align-items:center;gap:8px">
+        Tsample[s]
+        <input id="tsample" type="number" min="1" step="1" value="600" placeholder="600" style="width:60px">
+      </label>
+      <label title="Working electrode target (mV)" style="display:flex;align-items:center;gap:8px">
+        V_WE[mV]
+        <input id="vwe" type="number" step="1" value="1100" placeholder="1100" style="width:60px">
+      </label>
+      <label title="Reference electrode target (mV)" style="display:flex;align-items:center;gap:8px">
+        V_RE[mV]
+        <input id="vre" type="number" step="1" value="500" placeholder="500" style="width:6dvb">
+      </label>
+      <button id="btnSetTsample" class="btn" title="Send 't <secs>', 'we <mV>', 're <mV>'">Set</button>
+
+      <button id="btnSingle" class="btn" title="Send 'c' (single conversion)">Single</button>
       <button id="btnStart" class="btn" title="Send 's MMDDHHMM' (current time)">Start</button>
       <button id="btnPeak" class="btn" title="Send 'p <N>'">Peak</button>
-      <input id="peakCount" type="number" min="1" step="1" value="10" placeholder="10" style="width:80px" title="Peak sample count (default 10)">
+      <input id="peakCount" type="number" min="1" step="1" value="10" placeholder="10" style="width:50px" title="Peak sample count (default 10)">
       <button id="btnStop" class="btn" title="Send 'x'">Stop</button>
       <button id="btnDump" class="btn" title="Send 'd' and start capture">Dump</button>
       <button id="btnErase" class="btn" title="Send 'e'">Erase</button>
@@ -127,7 +143,7 @@
     <div id="term" aria-live="polite"></div>
 
     <div class="toolbar" style="margin-top:12px">
-      <input id="cmd" class="grow" type="text" placeholder="Type command… press Enter to send" />
+      <input id="cmd" type="text" style="width:300px" placeholder="Type command… press Enter to send" />
       <label>Line end
         <select id="ending">
           <option value="none">None</option>
@@ -138,7 +154,6 @@
       </label>
       <label><input id="hexMode" type="checkbox"> Hex</label>
       <button id="btnSend" class="btn">Send</button>
-      <button id="btnPlot" class="btn">Plot Log</button>
       <input id="fileLog" type="file" accept=".txt,.csv" style="display:none">
       <button id="btnClear" class="btn">Clear</button>
     </div>
@@ -174,7 +189,8 @@
         saveCapBtn=$("btnSaveCapture"), saveLogBtn=$("btnSaveLog"),
         devNameEl=$("devname"),
         btnPlot=$("btnPlot"), btnPlotTop=$("btnPlotTop"), btnPlotBottom=$("btnPlotBottom"), fileLog=$("fileLog"),
-        btnInfo=$("btnInfo"), btnStart=$("btnStart"), btnPeak=$("btnPeak"), btnDump=$("btnDump"), btnStop=$("btnStop"), btnErase=$("btnErase"), peakCount=$("peakCount"),
+        btnInfo=$("btnInfo"), btnStart=$("btnStart"), btnPeak=$("btnPeak"), btnDump=$("btnDump"), btnStop=$("btnStop"), btnErase=$("btnErase"),
+        peakCount=$("peakCount"), tsample=$("tsample"), btnSetTsample=$("btnSetTsample"), vwe=$("vwe"), vre=$("vre"), btnSingle=$("btnSingle"),
         plots=$("plots"), plot1=$("plot1"), plot2=$("plot2"), plot3=$("plot3"),
         legend1=$("legend1"), legend2=$("legend2"), legend3=$("legend3");
   async function sendCmd(text){
@@ -611,10 +627,33 @@
     sendCmd(`p ${n}`);
   };
   if(btnStop) btnStop.onclick = () => sendCmd('x');
+  if(btnSingle) btnSingle.onclick = () => sendCmd('c');
   if(btnDump) btnDump.onclick = () => sendCmd('d');
   if(btnErase) btnErase.onclick = () => {
     append(`<span class="muted">\n[Erase] Sending erase command…\n</span>`);
     sendCmd('e');
+  };
+
+  if(btnSetTsample) btnSetTsample.onclick = async () => {
+    const t = parseInt(tsample?.value || '', 10);
+    const we = parseInt(vwe?.value || '', 10);
+    const re = parseInt(vre?.value || '', 10);
+    if (!Number.isFinite(t) || t <= 0) {
+      append(`<span class="muted">\n[Tsample] Enter a positive number of seconds.\n</span>`);
+      return;
+    }
+    if (!Number.isFinite(we)) {
+      append(`<span class="muted">\n[V_WE] Enter an integer mV value.\n</span>`);
+      return;
+    }
+    if (!Number.isFinite(re)) {
+      append(`<span class="muted">\n[V_RE] Enter an integer mV value.\n</span>`);
+      return;
+    }
+    // Send t, then WE and RE setpoints
+    await sendCmd(`t ${t}`);
+    await sendCmd(`we ${we}`);
+    await sendCmd(`re ${re}`);
   };
 
   saveCapBtn.onclick=()=>{
