@@ -136,8 +136,8 @@
 
       <button id="btnSingle" class="btn" title="Send 'c' (single conversion)">Single</button>
       <button id="btnStart" class="btn" title="Send 's MMDDHHMM' (current time)">Start</button>
-      <button id="btnPeak" class="btn" title="Send 'p <N>'">Peak</button>
-      <input id="peakCount" type="number" min="1" step="1" value="10" placeholder="10" style="width:50px" title="Peak sample count (default 10)">
+      <button id="btnpeek" class="btn" title="Send 'p <N>'">Peek</button>
+      <input id="peekCount" type="number" min="1" step="1" value="10" placeholder="10" style="width:50px" title="peek sample count (default 10)">
       <button id="btnStop" class="btn" title="Send 'x'">Stop</button>
       <button id="btnDump" class="btn" title="Send 'd' and start capture">Dump</button>
       <button id="btnErase" class="btn" title="Send 'e'">Erase</button>
@@ -179,8 +179,13 @@
     </div>
 
     <p class="muted" style="margin:10px 2px 0">
-      Works in Chrome/Edge (desktop/Android). iOS Safari/Chrome (WebKit) lack Web Bluetooth;
-      use a Web-BLE browser app Bluefy when running on iPhone
+      Works best in Chrome on desktop/Android.<br>
+      On iPhone/iPad, use the 
+      <a href="https://apps.apple.com/us/app/bluefy-web-ble-browser/id1492822055" 
+        target="_blank" rel="noopener noreferrer" style="color:var(--accent);text-decoration:none;">
+        Bluefy Web-BLE Browser
+      </a> <br>
+      Version 1.05
     </p>
   </div>
 
@@ -192,8 +197,8 @@
         saveCapBtn=$("btnSaveCapture"), saveLogBtn=$("btnSaveLog"),
         devNameEl=$("devname"),
         btnPlot=$("btnPlot"), btnPlotTop=$("btnPlotTop"), btnPlotBottom=$("btnPlotBottom"), fileLog=$("fileLog"),
-        btnInfo=$("btnInfo"), btnStart=$("btnStart"), btnPeak=$("btnPeak"), btnDump=$("btnDump"), btnStop=$("btnStop"), btnErase=$("btnErase"),
-        peakCount=$("peakCount"), tsample=$("tsample"), btnSetTsample=$("btnSetTsample"), vwe=$("vwe"), vre=$("vre"), btnSingle=$("btnSingle"),
+        btnInfo=$("btnInfo"), btnStart=$("btnStart"), btnpeek=$("btnpeek"), btnDump=$("btnDump"), btnStop=$("btnStop"), btnErase=$("btnErase"),
+        peekCount=$("peekCount"), tsample=$("tsample"), btnSetTsample=$("btnSetTsample"), vwe=$("vwe"), vre=$("vre"), btnSingle=$("btnSingle"),
         plots=$("plots"), plot1=$("plot1"), plot2=$("plot2"), plot3=$("plot3"),
         legend1=$("legend1"), legend2=$("legend2"), legend3=$("legend3");
   async function sendCmd(text){
@@ -612,7 +617,6 @@
         setStatus("Disconnected", "");
         append(`<span class="muted">\n[System] Disconnected\n</span>`);
       });
-      cmd.focus();
     }catch(e){
       setStatus("Idle", "");
       append(`<span class="muted">\n[Error] ${e}\n</span>`);
@@ -642,7 +646,7 @@
       cmd.value="";
     }catch(e){append(`<span class="muted">\n[Send error] ${e}\n</span>`);}
   }
-  // ===== Helpers for Start/Peak/Dump toolbar =====
+  // ===== Helpers for Start/peek/Dump toolbar =====
   function pad2(n){ return String(n).padStart(2,'0'); }
   function fmtMMDDHHMM(date){
     const mm = pad2(date.getMonth()+1);
@@ -657,10 +661,10 @@
     const code = fmtMMDDHHMM(new Date());
     sendCmd(`s ${code}`);
   };
-  if(btnPeak) btnPeak.onclick = () => {
-    const n = parseInt(peakCount?.value||'', 10);
+  if(btnpeek) btnpeek.onclick = () => {
+    const n = parseInt(peekCount?.value||'', 10);
     if(!Number.isFinite(n) || n <= 0){
-      append(`<span class="muted">\n[Peak] Enter a positive integer for samples.\n</span>`);
+      append(`<span class="muted">\n[peek] Enter a positive integer for samples.\n</span>`);
       return;
     }
     sendCmd(`p ${n}`);
@@ -702,34 +706,56 @@
     downloadBlob(`ble-capture-${stamp}.txt`, blob);
   };
   saveLogBtn.onclick = () => {
-      const raw = term.textContent || "";
-      const U = raw.toUpperCase();
+  const raw = term.textContent || "";
+  const U = raw.toUpperCase();
 
-      // Find the last "LOG TAG," (so if you did multiple runs, we take the latest)
-      const startMark = "LOG TAG,";
-      const startIdx = U.lastIndexOf(startMark);
-      if (startIdx === -1) {
-        alert('Could not find "LOG TAG," in the console output.');
-        return;
-      }
+  // Find "LOG TAG," and "# DONE"
+  const startMark = "LOG TAG,";
+  const startIdx = U.lastIndexOf(startMark);
+  if (startIdx === -1) {
+    alert('Could not find "LOG TAG," in the console output.');
+    return;
+  }
+  const afterStart = raw.slice(startIdx + startMark.length);
+  const endRelIdx = afterStart.toUpperCase().search(/(^|\n)\s*#\s*DONE\b/);
+  if (endRelIdx === -1) {
+    alert('Could not find "# DONE" following "LOG TAG,".');
+    return;
+  }
 
-      // Find the first "# DONE" after that
-      const afterStart = raw.slice(startIdx + startMark.length);
-      const endRelIdx = afterStart.toUpperCase().search(/(^|\n)\s*#\s*DONE\b/);
-      if (endRelIdx === -1) {
-        alert('Could not find "# DONE" following "LOG TAG,".');
-        return;
-      }
+  // Extract log block
+  let block = afterStart.slice(0, endRelIdx);
+  block = block.replace(/^\s*\n?/, "");
 
-      // Extract just the block (trim one leading newline if present)
-      let block = afterStart.slice(0, endRelIdx);
-      block = block.replace(/^\s*\n?/, ""); // remove leading blank line if any
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const blob = new Blob([block], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
 
-      // Download (mobile-friendly)
-      const stamp = new Date().toISOString().replace(/[:.]/g,'-');
-      const blob  = new Blob([block], { type: 'text/plain' });
-      downloadBlob(`ble-log-${stamp}.txt`, blob);
-    };
+  // Detect platform
+  const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+  if (isMobile) {
+    // Mobile: open in new tab to trigger Share / Save dialog
+    const win = window.open(url, "_blank");
+    if (!win) {
+      alert("Popup blocked — please allow popups or long-press the link to save.");
+    } else {
+      append(`<span class="muted">\n[Save] Opened log in new tab for saving.\n</span>`);
+    }
+  } else {
+    // Desktop: direct download
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `ble-log-${stamp}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    append(`<span class="muted">\n[Save] Saved ble-log-${stamp}.txt\n</span>`);
+  }
+
+  // Cleanup
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+};
   const openPlotPicker = () => fileLog.click();
   if(btnPlot) btnPlot.onclick = openPlotPicker;
   if(btnPlotTop) btnPlotTop.onclick = openPlotPicker;
