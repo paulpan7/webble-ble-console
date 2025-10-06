@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Web BLE Terminal</title>
+<title>NovaE Terminal</title>
 <style>
   :root{
     --bg:#0b0d10; --card:#111418; --muted:#8b95a7; --fg:#e6e9ee;
@@ -180,7 +180,7 @@
 
     <p class="muted" style="margin:10px 2px 0">
       Works in Chrome/Edge (desktop/Android). iOS Safari/Chrome (WebKit) lack Web Bluetooth;
-      use a Web-BLE browser like Bluefy if testing on iPhone.
+      use a Web-BLE browser app Bluefy when running on iPhone
     </p>
   </div>
 
@@ -211,6 +211,42 @@
   // Escape HTML special chars so TX text doesn’t break the DOM
   function esc(s){
     return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  }
+
+  // Mobile-friendly download helper: prefers Web Share (iOS),
+  // otherwise opens blob in a new tab on iOS, and uses <a download> elsewhere
+  async function downloadBlob(filename, blob) {
+    const ua = navigator.userAgent || "";
+    const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+    try {
+      const file = new File([blob], filename, { type: blob.type || 'text/plain' });
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: filename, text: filename });
+        return;
+      }
+    } catch (e) {
+      // ignore and fall through
+    }
+
+    const url = URL.createObjectURL(blob);
+
+    if (isIOS) {
+      // iOS often ignores <a download>; new tab works better (then Share -> Save to Files)
+      const w = window.open(url, '_blank', 'noopener');
+      // Give WebKit time to load before revoking
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      return;
+    }
+
+    // Desktop/Android path
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
   }
 
   function ts(){return new Date().toLocaleTimeString();}
@@ -659,13 +695,11 @@
     await sendCmd(`re ${re}`);
   };
 
-  saveCapBtn.onclick=()=>{
-    if(!captureData.length) return;
-    const stamp=new Date().toISOString().replace(/[:.]/g,'-');
-    const blob=new Blob([captureData],{type:"text/plain"});
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement("a");a.href=url;a.download=`ble-capture-${stamp}.txt`;
-    document.body.appendChild(a);a.click();URL.revokeObjectURL(url);a.remove();
+  saveCapBtn.onclick = () => {
+    if (!captureData.length) return;
+    const stamp = new Date().toISOString().replace(/[:.]/g,'-');
+    const blob  = new Blob([captureData], { type: 'text/plain' });
+    downloadBlob(`ble-capture-${stamp}.txt`, blob);
   };
   saveLogBtn.onclick = () => {
       const raw = term.textContent || "";
@@ -691,17 +725,10 @@
       let block = afterStart.slice(0, endRelIdx);
       block = block.replace(/^\s*\n?/, ""); // remove leading blank line if any
 
-      // Download
+      // Download (mobile-friendly)
       const stamp = new Date().toISOString().replace(/[:.]/g,'-');
-      const blob = new Blob([block], { type: "text/plain" });
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement("a");
-      a.href = url;
-      a.download = `ble-log-${stamp}.txt`;
-      document.body.appendChild(a);
-      a.click();
-      URL.revokeObjectURL(url);
-      a.remove();
+      const blob  = new Blob([block], { type: 'text/plain' });
+      downloadBlob(`ble-log-${stamp}.txt`, blob);
     };
   const openPlotPicker = () => fileLog.click();
   if(btnPlot) btnPlot.onclick = openPlotPicker;
