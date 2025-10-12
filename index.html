@@ -185,7 +185,7 @@
         target="_blank" rel="noopener noreferrer" style="color:var(--accent);text-decoration:none;">
         Bluefy Web-BLE Browser
       </a> <br>
-      Version 1.05
+      Version 1.1
     </p>
   </div>
 
@@ -213,9 +213,40 @@
   let device=null,server=null,service=null,txChar=null,rxChar=null;
   const enc=new TextEncoder(), dec=new TextDecoder();
   let capturing=false, captureData="", rxRemainder="";
+  let captureBytes = 0;
+  let nextHud = 0;
+  let captureHeaderLine = ""; // stores raw "LOG TAG,..." line when present
   // Escape HTML special chars so TX text doesn’t break the DOM
   function esc(s){
     return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  }
+
+  // --- Buffered terminal printing (reduces DOM churn) ---
+  let __bufQ = [];
+  let __bufRAF = false;
+  const __MAX_CHARS = 500_000; // keep last ~500k chars
+  function appendBuffered(html){
+    __bufQ.push(html);
+    if(!__bufRAF){
+      __bufRAF = true;
+      requestAnimationFrame(()=>{
+        if(__bufQ.length){
+          const chunk = __bufQ.join('');
+          __bufQ.length = 0;
+          term.insertAdjacentHTML('beforeend', chunk);
+          // Trim if too large
+          if (term.textContent.length > __MAX_CHARS) {
+            let over = term.textContent.length - __MAX_CHARS;
+            while (term.firstChild && over > 0) {
+              over -= (term.firstChild.textContent||'').length;
+              term.removeChild(term.firstChild);
+            }
+          }
+          term.scrollTop = term.scrollHeight;
+        }
+        __bufRAF = false;
+      });
+    }
   }
 
   // Mobile-friendly download helper: prefers Web Share (iOS),
@@ -257,8 +288,7 @@
   function ts(){return new Date().toLocaleTimeString();}
   function append(html){
     const prefix = showTs.checked ? `<span class="muted">[${ts()}] </span>` : "";
-    term.insertAdjacentHTML("beforeend", prefix+html);
-    term.scrollTop = term.scrollHeight;
+    appendBuffered(prefix + html);
   }
   function setStatus(txt, name){
     statusEl.textContent = txt;
@@ -291,25 +321,97 @@
     const raw=lineRaw.replace(/\r+$/,'');
     const token=normalizeLine(raw);
     if(token==='d'){
-      capturing=true; captureData="";
-      saveCapBtn.style.display="none";
-      append(`<span class="muted">\n[Capture started]\n</span>`);
+      capturing = true;
+      captureData = "";
+      captureBytes = 0;
+      saveCapBtn.style.display = "none";
+      append(`<span class="muted">\n[Capture started — buffering to memory]\n</span>`);
+      statusEl.textContent = 'Downloading…';
       return;
     }
     if(token==='done'){
-      capturing=false;
-      append(`<span class="muted">\n[Capture ended — ${captureData.length} bytes]\n</span>`);
-      if(captureData.length) saveCapBtn.style.display="";
+      capturing = false;
+      append(`<span class="muted">\n[Capture ended — ${captureBytes} bytes buffered]\n</span>`);
+      if(captureData.length) saveCapBtn.style.display = "";
+      statusEl.textContent = 'Connected';
       return;
     }
     if(capturing){ captureData+=raw+"\n"; }
   }
   function onNotifyText(txt){
-    append(txt);
-    rxRemainder+=txt;
-    const parts=rxRemainder.split(/\n/);
-    rxRemainder=parts.pop();
-    for(const one of parts) handleCompleteLine(one);
+    // Accumulate into remainder and split into complete lines first
+    rxRemainder += txt;
+    const parts = rxRemainder.split(/\n/);
+    rxRemainder = parts.pop(); // keep last partial line
+
+    let out = ""; // text to print to terminal (only when not capturing)
+
+    for (const lineRaw of parts) {
+      const raw = lineRaw.replace(/\r+$/,'');
+      const token = normalizeLine(raw);
+
+      // Detect start of capture either by 'd' echo or a 'LOG TAG,' header
+      if (!capturing && (token === 'd' || token.startsWith('logtag'))) {
+        // Enter capture mode
+        capturing = true;
+        captureData = "";
+        captureBytes = 0;
+        captureHeaderLine = "";
+        saveCapBtn.style.display = "none";
+
+        // If this line is the LOG TAG header, print it and include it in the buffer
+        if (token.startsWith('logtag')) {
+          captureHeaderLine = raw;                 // keep exact original text
+          append(raw + "\n");                    // show in terminal
+          captureData += raw + "\n";             // store in buffer
+          captureBytes += raw.length + 1;
+        }
+
+        append(`<span class=\"muted\">\n[Capture started — buffering to memory]\n</span>`);
+        statusEl.textContent = 'Downloading…';
+        continue; // don't print any further control line text here
+      }
+
+      // If currently capturing, buffer lines and show HUD, but do not print
+      if (capturing) {
+        // End token
+        if (token === 'done') {
+          // Add the original end marker line (e.g., "# DONE") to the capture
+          captureData += raw + "\n";
+          captureBytes += raw.length + 1;
+
+          capturing = false;
+          const kb = (captureBytes / 1024).toFixed(1);
+          append(`<span class=\"muted\">\n[Capture ended — ${kb} KB buffered]\n</span>`);
+          if (captureData.length) {
+            saveCapBtn.style.display = "";
+            // Print the buffered capture content to the terminal (includes LOG TAG and # DONE)
+            append(`<span class=\"muted\">[Captured data follows]\n</span>`);
+            append(esc(captureData) + "\n");
+          }
+          statusEl.textContent = 'Connected';
+          continue; // don't print control line separately
+        }
+        // Normal captured line
+        captureData += raw + "\n";
+        captureBytes += raw.length + 1;
+
+        // Throttled HUD (~6–7 Hz)
+        const now = performance.now();
+        if (now >= nextHud) {
+          const kb = (captureBytes/1024).toFixed(1);
+          statusEl.textContent = `Downloading… ${kb} KB`;
+          nextHud = now + 150;
+        }
+        continue; // skip printing while capturing
+      }
+
+      // Not capturing: pass-through to terminal output
+      out += raw + "\n";
+    }
+
+    // Flush any non-capture text in one DOM update
+    if (out) append(out);
   }
 
   // --- CSV parsing & plotting helpers ---
@@ -617,6 +719,7 @@
         setStatus("Disconnected", "");
         append(`<span class="muted">\n[System] Disconnected\n</span>`);
       });
+      cmd.focus();
     }catch(e){
       setStatus("Idle", "");
       append(`<span class="muted">\n[Error] ${e}\n</span>`);
@@ -706,56 +809,34 @@
     downloadBlob(`ble-capture-${stamp}.txt`, blob);
   };
   saveLogBtn.onclick = () => {
-  const raw = term.textContent || "";
-  const U = raw.toUpperCase();
-
-  // Find "LOG TAG," and "# DONE"
-  const startMark = "LOG TAG,";
-  const startIdx = U.lastIndexOf(startMark);
-  if (startIdx === -1) {
-    alert('Could not find "LOG TAG," in the console output.');
-    return;
-  }
-  const afterStart = raw.slice(startIdx + startMark.length);
-  const endRelIdx = afterStart.toUpperCase().search(/(^|\n)\s*#\s*DONE\b/);
-  if (endRelIdx === -1) {
-    alert('Could not find "# DONE" following "LOG TAG,".');
-    return;
-  }
-
-  // Extract log block
-  let block = afterStart.slice(0, endRelIdx);
-  block = block.replace(/^\s*\n?/, "");
-
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const blob = new Blob([block], { type: "text/plain" });
-  const url = URL.createObjectURL(blob);
-
-  // Detect platform
-  const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-
-  if (isMobile) {
-    // Mobile: open in new tab to trigger Share / Save dialog
-    const win = window.open(url, "_blank");
-    if (!win) {
-      alert("Popup blocked — please allow popups or long-press the link to save.");
-    } else {
-      append(`<span class="muted">\n[Save] Opened log in new tab for saving.\n</span>`);
+    // Prefer buffered capture (it now contains LOG TAG and # DONE if present)
+    let src = (captureData && captureData.length) ? captureData : (term.textContent || "");
+    if (!src || !src.trim()) {
+      alert('No log data available to save. Try running Dump again.');
+      return;
     }
-  } else {
-    // Desktop: direct download
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `ble-log-${stamp}.txt`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    append(`<span class="muted">\n[Save] Saved ble-log-${stamp}.txt\n</span>`);
-  }
 
-  // Cleanup
-  setTimeout(() => URL.revokeObjectURL(url), 5000);
-};
+    // Case-insensitive search for LOG TAG and # DONE markers
+    const startMatch = src.match(/(^|\n)\s*LOG\s*TAG\s*,/i);
+    let block = '';
+    if (startMatch) {
+      const startIndex = (startMatch.index ?? 0) + startMatch[0].length;
+      const tail = src.slice(startIndex);
+      const endRelIdx = tail.search(/(^|\n)\s*#\s*DONE\b/i);
+      block = (endRelIdx === -1) ? tail : tail.slice(0, endRelIdx);
+    } else {
+      // If we can't find the start marker, save the entire buffer
+      block = src;
+    }
+
+    // Tidy leading blank line
+    block = block.replace(/^\s*\n?/, '');
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const blob  = new Blob([block], { type: 'text/plain' });
+    downloadBlob(`ble-log-${stamp}.txt`, blob);
+    append(`<span class=\"muted\">\n[Save] Saved ble-log-${stamp}.txt (${block.length} bytes)\n</span>`);
+  };
   const openPlotPicker = () => fileLog.click();
   if(btnPlot) btnPlot.onclick = openPlotPicker;
   if(btnPlotTop) btnPlotTop.onclick = openPlotPicker;
